@@ -4,12 +4,28 @@ A small FastAPI service that generates Airflow DAG files on demand. Each call
 to the deploy endpoint writes a new DAG file to disk; Airflow (running
 separately) picks it up, parses it, and shows it in the UI.
 
+## Folder structure
+
+```
+.
+├── airflow/            # Airflow DAGs (generated/ is written to by the backend)
+│   └── dags/
+│       └── generated/
+├── backend/            # FastAPI service
+│   ├── app/
+│   └── requirements.txt
+├── ui/                 # Frontend (placeholder)
+├── docker-compose.yml
+├── Dockerfile          # Builds the backend image (context: repo root)
+└── .gitignore
+```
+
 ## Architecture
 
 ```
-Client → FastAPI (app/api/deploy.py)
+Client → FastAPI (backend/app/api/deploy.py)
              → AirflowService.create_dag()
-                   → writes app/templates/dag_template.py rendered DAG
+                   → writes backend/app/templates/dag_template.py rendered DAG
                      to <AIRFLOW_DAG_DIR>/deployment_<id>.py
                                    ↓ (shared volume / folder)
                           Airflow scheduler & webserver
@@ -78,6 +94,7 @@ Airflow UI: http://localhost:8080 (`admin` / `admin`).
 ### 2. Set up the backend locally
 
 ```bash
+cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -87,10 +104,11 @@ pip install -r requirements.txt
 
 Docker mounts the host folder `./airflow/dags` to `/opt/airflow/dags` inside
 the Airflow containers. When the backend runs on your host (not in Docker),
-it must write into that same host folder — use an **absolute path**:
+it must write into that same host folder — use an **absolute path** (run
+this from the repo root, before/after `cd backend` as needed):
 
 ```bash
-export AIRFLOW_DAG_DIR="$(pwd)/airflow/dags/generated"
+export AIRFLOW_DAG_DIR="$(git rev-parse --show-toplevel)/airflow/dags/generated"
 ```
 
 (`AirflowService` defaults to `/opt/airflow/dags/generated`, which only
