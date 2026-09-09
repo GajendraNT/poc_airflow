@@ -13,7 +13,13 @@ separately) picks it up, parses it, and shows it in the UI.
 │       └── generated/
 ├── backend/            # FastAPI service
 │   ├── app/
+│   │   ├── core/       # Settings (env-based DB config)
+│   │   ├── db/          # SQLAlchemy Base + session
+│   │   └── models/      # SQLAlchemy models (e.g. Connection)
 │   └── requirements.txt
+├── liquibase/
+│   └── changelog/
+│       └── changelog-master.sql   # only SQL-formatted Liquibase changesets live here
 ├── ui/                 # Frontend (placeholder)
 ├── docker-compose.yml
 ├── Dockerfile          # Builds the backend image (context: repo root)
@@ -62,6 +68,8 @@ This starts:
 | `airflow-init`         | Runs migrations + creates admin user      | -    |
 | `airflow-webserver`    | Airflow UI                                | 8080 |
 | `airflow-scheduler`    | Parses DAGs, schedules runs               | -    |
+| `app-db`               | App's own Postgres DB (e.g. `connection` table) | 5433 |
+| `liquibase`            | Applies `liquibase/changelog/changelog-master.sql` against `app-db`, then exits | -    |
 | `api`                  | This FastAPI deployment service           | 8000 |
 
 - Airflow UI: http://localhost:8080 (user: `admin`, password: `admin`)
@@ -124,6 +132,46 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 The API is now available at http://localhost:8000, and any DAG it generates
 lands in `./airflow/dags/generated/`, which the Dockerized Airflow scheduler
 is already watching.
+
+## App database (Liquibase)
+
+The backend has its own Postgres database (`app-db` in Docker, separate from
+Airflow's metadata DB), holding tables like `connection`. Schema changes are
+managed with Liquibase, using **only SQL-formatted changelogs** —
+`liquibase/changelog/changelog-master.sql`. Add new changesets to that file
+(each with its own `--changeset` header); don't introduce XML/YAML/JSON
+changelogs.
+
+Config is read from env vars (see `.env.example`):
+
+```
+DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+```
+
+### Docker
+
+`docker compose up -d` (or the `api` service specifically) will start
+`app-db`, run `liquibase` to apply the changelog, and only then start `api`.
+
+### Standalone backend
+
+Start just the DB and run the migration:
+
+```bash
+docker compose up -d app-db
+docker compose up liquibase
+```
+
+Then run the backend against the Docker-exposed port (`5433`):
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export DB_HOST=localhost DB_PORT=5433 DB_NAME=deployment_service \
+       DB_USER=deployment_service DB_PASSWORD=deployment_service
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
 ## Using the API
 

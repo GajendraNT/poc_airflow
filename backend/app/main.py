@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.connection import router as connection_router
 from app.api.deploy import router as deploy_router
 
 
@@ -11,6 +12,11 @@ app = FastAPI(
 
 app.include_router(
     deploy_router,
+    prefix="/api",
+)
+
+app.include_router(
+    connection_router,
     prefix="/api",
 )
 

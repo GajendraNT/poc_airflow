@@ -1,0 +1,94 @@
+# -----------------------------------------------------------------------------
+# Database test commands (app-db + liquibase)
+# Run from the repo root.
+# -----------------------------------------------------------------------------
+
+# 1. Start just the app database
+docker compose up -d app-db
+
+# 2. Check it's healthy
+docker compose ps app-db
+
+# 3. Apply the Liquibase migration (creates the `connection` table)
+docker compose up liquibase
+
+# 4. Check migration history Liquibase recorded
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "SELECT id, author, filename, dateexecuted FROM databasechangelog;"
+
+# 5. Open an interactive psql shell inside the container
+docker exec -it deployment-service-app-db-1 psql -U deployment_service -d deployment_service
+
+# --- Everything below can be run inside that psql shell, or piped with -c ---
+
+# 6. List tables
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "\dt"
+
+# 7. Describe the connection table schema
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "\d connection"
+
+# 8. Insert a test row
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "INSERT INTO connection (connection_name, host_port, username, password, description, database) VALUES ('test-conn', 'localhost:5432', 'testuser', 'testpass', 'created via cli test', 'testdb');"
+
+# 9. Select all rows
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "SELECT id, connection_name, host_port, username, database, created_at, updated_at FROM connection;"
+
+# 10. Update a row
+#     NOTE: updated_at auto-refresh (onupdate=func.now()) is applied by
+#     SQLAlchemy at the ORM layer, not by a DB trigger — a raw SQL UPDATE
+#     from psql will NOT bump updated_at on its own. To actually see it
+#     change from the CLI, set it explicitly:
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "UPDATE connection SET description = 'updated via cli test', updated_at = now() WHERE connection_name = 'test-conn';"
+
+# 11. Confirm updated_at changed (created_at should stay the same, updated_at newer)
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "SELECT connection_name, created_at, updated_at FROM connection WHERE connection_name = 'test-conn';"
+
+# 11b. To see the ORM auto-refresh instead, use command #16 below (updates via SQLAlchemy)
+
+# 12. Delete the test row (cleanup)
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "DELETE FROM connection WHERE connection_name = 'test-conn';"
+
+# 13. Confirm table is empty again
+docker exec deployment-service-app-db-1 psql -U deployment_service -d deployment_service -c "SELECT count(*) FROM connection;"
+
+# -----------------------------------------------------------------------------
+# Connecting from the host machine instead of via `docker exec`
+# (app-db is exposed on host port 5433)
+# -----------------------------------------------------------------------------
+
+# 14. psql from host (requires local psql client installed)
+PGPASSWORD=deployment_service psql -h localhost -p 5433 -U deployment_service -d deployment_service
+
+# 15. Same, one-shot query from host
+PGPASSWORD=deployment_service psql -h localhost -p 5433 -U deployment_service -d deployment_service -c "\dt"
+
+# -----------------------------------------------------------------------------
+# Backend -> DB sanity check (standalone, no docker for the API)
+# -----------------------------------------------------------------------------
+
+# 16. From backend/ with the venv active and DB_* env vars exported
+#     (see README "Standalone backend" section), run a quick insert/select:
+python3 -c "
+from app.db.session import engine
+from app.models.connection import Connection
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+
+with Session(engine) as s:
+    c = Connection(connection_name='cli-test', host_port='localhost:5432', username='u', password='p', description='d', database='db1')
+    s.add(c)
+    s.commit()
+    rows = s.execute(select(Connection)).scalars().all()
+    for r in rows:
+        print(r.id, r.connection_name, r.created_at, r.updated_at)
+"
+
+# -----------------------------------------------------------------------------
+# Teardown
+# -----------------------------------------------------------------------------
+
+# 17. Stop app-db (keeps data volume)
+docker compose stop app-db
+
+# 18. Stop and wipe app-db data volume entirely (down doesn't take a service arg;
+#     this removes ALL compose volumes, not just app-db's)
+docker compose down -v
